@@ -17,7 +17,12 @@ enum {
     CUBIES = 7,
     FACES = 3,
     MOVES = 9,
-    MAX_MOVES = 11 /* God's number for the 2x2x2 in the half-turn metric */
+    MAX_MOVES = 11, /* God's number for the 2x2x2 in the half-turn metric */
+    /* A table row is FACES successors then a depth, all halfwords. Every
+     * offset below is in bytes: a row is ROW_BYTES from the next, a face's
+     * successor is 2 * face into it and the depth is DEPTH_AT into it. */
+    ROW_BYTES = 2 * (FACES + 1),
+    DEPTH_AT = 2 * FACES
 };
 
 typedef struct {
@@ -26,11 +31,26 @@ typedef struct {
 
 static const char *const move_names[MOVES] = {"R",  "R2", "R'", "B", "B2",
                                               "B'", "D",  "D2", "D'"};
-static const uint8_t inverse_move[MOVES] = {2, 1, 0, 5, 4, 3, 8, 7, 6};
+/* The move that undoes `turns` quarter turns of `face`, at 4 * face + turns,
+ * so that the search finds it with a shift rather than a multiply by 3. The
+ * entries for zero turns are never read. */
+static const uint8_t inverse_move[4 * FACES] = {0, 2, 1, 0, 0, 5,
+                                                4, 3, 0, 8, 7, 6};
 
-/* permutation_move, orientation_move, permutation_depth and
- * orientation_depth: 30,240 + 4,374 + 5,040 + 729 = 40,383 bytes of .rodata. */
+/* permutation_table and orientation_table: 40,320 + 5,832 = 46,152 bytes of
+ * .rodata. A successor is stored as the byte offset of its row, so the search
+ * holds positions as row offsets, solved being 0, and never converts back to a
+ * rank. */
 #include "ripes_tables.h"
+
+/* The halfword at byte offset `at` of a table: a row offset plus 2 * face for
+ * that face's successor, or plus DEPTH_AT for the row's depth. One add and one
+ * load, where table[rank][face] costs a multiply by the row width and another
+ * by the entry size first. */
+static uint32_t entry(const uint16_t (*table)[FACES + 1], uint32_t at)
+{
+    return *(const uint16_t *) ((const char *) table + at);
+}
 
 static uint8_t solution[MAX_MOVES];
 
@@ -64,7 +84,7 @@ static uint32_t rank_orientation(const uint8_t o[CUBIES])
 
 /* Depth-first search for a path of exactly `bound` moves from (p, o) to
  * solved, never turning the same face twice in a row, since an optimal path
- * cannot.
+ * cannot. p and o are row offsets into the two tables.
  *
  * It does not recurse. The node being expanded lives in locals the compiler
  * keeps in registers: its position (p, o), `left` moves from the goal, the
@@ -73,26 +93,30 @@ static uint32_t rank_orientation(const uint8_t o[CUBIES])
  * saving the parent's p, o, face and turn at level `left`; backing up loads
  * them again, and the parent's (np, no) is the child it is leaving. The nodes
  * are visited in the order a recursive search would visit them, so the first
- * solution found is the same. saved_face[left + 1] is the parent's face, the
- * one this node must not turn, and saved_face[bound + 1] stands in for the
- * root's parent with FACES, which matches none.
+ * solution found is the same.
+ *
+ * `face` is held as its byte offset in a row, 2 * face, so it indexes the
+ * tables as it is; it steps by 2 and reaches DEPTH_AT when every face is done.
+ * saved_face[left + 1] is the parent's face, the one this node must not turn,
+ * and saved_face[bound + 1] stands in for the root's parent with DEPTH_AT,
+ * which matches none.
  */
 static int search(uint32_t p, uint32_t o, uint32_t bound)
 {
     uint16_t saved_p[MAX_MOVES + 1], saved_o[MAX_MOVES + 1];
     uint8_t saved_face[MAX_MOVES + 2], saved_turn[MAX_MOVES + 1];
     uint32_t np = p, no = o;
-    uint32_t left = bound, face = 0, turn = 0, last_face = FACES;
+    uint32_t left = bound, face = 0, turn = 0, last_face = DEPTH_AT;
 
     COUNT_NODE();
     if (bound == 0)
         return p == 0 && o == 0;
-    saved_face[bound + 1] = FACES;
+    saved_face[bound + 1] = DEPTH_AT;
     for (;;) {
         /* This face is done, or was the parent's: try the next, and once all
          * three are done, back up to the parent. */
         if (face == last_face || turn == 3) {
-            if (++face == FACES) {
+            if ((face += 2) == DEPTH_AT) {
                 if (++left > bound)
                     return 0;
                 np = p;
@@ -109,12 +133,13 @@ static int search(uint32_t p, uint32_t o, uint32_t bound)
             no = o;
             continue;
         }
-        np = permutation_move[np][face];
-        no = orientation_move[no][face];
+        np = entry(permutation_table, np + face);
+        no = entry(orientation_table, no + face);
         ++turn;
-        if (permutation_depth[np] >= left || orientation_depth[no] >= left)
+        if (entry(permutation_table, np + DEPTH_AT) >= left ||
+            entry(orientation_table, no + DEPTH_AT) >= left)
             continue;
-        solution[left - 1] = inverse_move[face * 3U + turn - 1U];
+        solution[left - 1] = inverse_move[(face << 1) + turn];
         COUNT_NODE();
         if (left == 1) {
             if (np == 0 && no == 0)
@@ -152,11 +177,11 @@ static int solve(const state_t *state)
         inverse.p[cubie] = (uint8_t) i;
         inverse.o[cubie] = (uint8_t) (state->o[i] ? 3 - state->o[i] : 0);
     }
-    uint32_t p = rank_permutation(inverse.p);
-    uint32_t o = rank_orientation(inverse.o);
-    uint32_t bound = permutation_depth[p] > orientation_depth[o]
-                        ? permutation_depth[p]
-                        : orientation_depth[o];
+    uint32_t p = rank_permutation(inverse.p) * ROW_BYTES;
+    uint32_t o = rank_orientation(inverse.o) * ROW_BYTES;
+    uint32_t p_depth = entry(permutation_table, p + DEPTH_AT);
+    uint32_t o_depth = entry(orientation_table, o + DEPTH_AT);
+    uint32_t bound = p_depth > o_depth ? p_depth : o_depth;
     for (; bound <= MAX_MOVES; ++bound)
         if (search(p, o, bound))
             return (int) bound;
