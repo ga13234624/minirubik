@@ -62,30 +62,67 @@ static uint16_t rank_orientation(const uint8_t o[CUBIES])
 #define COUNT_NODE() ((void) 0)
 #endif
 
-/* Depth-first search for a path of exactly `left` moves from (p, o) to solved,
- * never turning the same face twice in a row, since an optimal path cannot.
+/* Depth-first search for a path of exactly `bound` moves from (p, o) to
+ * solved, never turning the same face twice in a row, since an optimal path
+ * cannot.
+ *
+ * It does not recurse. Level `left` of the arrays below is the node `left`
+ * moves from the goal: its position, the face it is turning, how many quarter
+ * turns of that face it has tried and the position they reached. Descending
+ * to a child fills the next level down and backtracking climbs one up, so the
+ * nodes are visited in the order a recursive search would visit them and the
+ * first solution found is the same. face[bound + 1] stands in for the root's
+ * parent, whose face FACES matches none.
  */
-static int search(uint16_t p, uint16_t o, uint8_t left, uint8_t last_face)
+static int search(uint16_t p, uint16_t o, uint8_t bound)
 {
+    uint16_t node_p[MAX_MOVES + 1], node_o[MAX_MOVES + 1];
+    uint16_t next_p[MAX_MOVES + 1], next_o[MAX_MOVES + 1];
+    uint8_t face[MAX_MOVES + 2], turns[MAX_MOVES + 1];
+    uint8_t left = bound;
+
     COUNT_NODE();
-    if (left == 0)
+    if (bound == 0)
         return p == 0 && o == 0;
-    for (uint8_t face = 0; face < FACES; ++face) {
-        uint16_t next_p = p, next_o = o;
-        if (face == last_face)
-            continue;
-        for (uint8_t turn = 0; turn < 3; ++turn) {
-            next_p = permutation_move[next_p][face];
-            next_o = orientation_move[next_o][face];
-            if (permutation_depth[next_p] >= left ||
-                orientation_depth[next_o] >= left)
+    face[bound + 1] = FACES;
+    node_p[left] = next_p[left] = p;
+    node_o[left] = next_o[left] = o;
+    face[left] = 0;
+    turns[left] = 0;
+    for (;;) {
+        uint8_t f = face[left];
+        /* This face is done, or was the parent's: try the next, and once all
+         * three are done, back up to the parent. */
+        if (f == face[left + 1] || turns[left] == 3) {
+            if (++f == FACES) {
+                if (++left > bound)
+                    return 0;
                 continue;
-            solution[left - 1] = inverse_move[face * 3U + turn];
-            if (search(next_p, next_o, (uint8_t) (left - 1), face))
-                return 1;
+            }
+            face[left] = f;
+            turns[left] = 0;
+            next_p[left] = node_p[left];
+            next_o[left] = node_o[left];
+            continue;
         }
+        uint16_t np = next_p[left] = permutation_move[next_p[left]][f];
+        uint16_t no = next_o[left] = orientation_move[next_o[left]][f];
+        uint8_t move = (uint8_t) (f * 3U + turns[left]++);
+        if (permutation_depth[np] >= left || orientation_depth[no] >= left)
+            continue;
+        solution[left - 1] = inverse_move[move];
+        COUNT_NODE();
+        if (left == 1) {
+            if (np == 0 && no == 0)
+                return 1;
+            continue;
+        }
+        --left;
+        node_p[left] = next_p[left] = np;
+        node_o[left] = next_o[left] = no;
+        face[left] = 0;
+        turns[left] = 0;
     }
-    return 0;
 }
 
 /* Fills solution[] and returns its length, or -1 if no solution exists.
@@ -112,7 +149,7 @@ static int solve(const state_t *state)
                         ? permutation_depth[p]
                         : orientation_depth[o];
     for (; bound <= MAX_MOVES; ++bound)
-        if (search(p, o, bound, FACES))
+        if (search(p, o, bound))
             return bound;
     return -1;
 }
