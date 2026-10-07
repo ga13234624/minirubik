@@ -66,62 +66,71 @@ static uint16_t rank_orientation(const uint8_t o[CUBIES])
  * solved, never turning the same face twice in a row, since an optimal path
  * cannot.
  *
- * It does not recurse. Level `left` of the arrays below is the node `left`
- * moves from the goal: its position, the face it is turning, how many quarter
- * turns of that face it has tried and the position they reached. Descending
- * to a child fills the next level down and backtracking climbs one up, so the
- * nodes are visited in the order a recursive search would visit them and the
- * first solution found is the same. face[bound + 1] stands in for the root's
- * parent, whose face FACES matches none.
+ * It does not recurse. The node being expanded lives in locals the compiler
+ * keeps in registers: its position (p, o), `left` moves from the goal, the
+ * face it is turning, how many quarter turns of that face it has tried and the
+ * position (np, no) they reached. Only descending to a child touches memory,
+ * saving the parent's p, o, face and turn at level `left`; backing up loads
+ * them again, and the parent's (np, no) is the child it is leaving. The nodes
+ * are visited in the order a recursive search would visit them, so the first
+ * solution found is the same. saved_face[left + 1] is the parent's face, the
+ * one this node must not turn, and saved_face[bound + 1] stands in for the
+ * root's parent with FACES, which matches none.
  */
 static int search(uint16_t p, uint16_t o, uint8_t bound)
 {
-    uint16_t node_p[MAX_MOVES + 1], node_o[MAX_MOVES + 1];
-    uint16_t next_p[MAX_MOVES + 1], next_o[MAX_MOVES + 1];
-    uint8_t face[MAX_MOVES + 2], turns[MAX_MOVES + 1];
-    uint8_t left = bound;
+    uint16_t saved_p[MAX_MOVES + 1], saved_o[MAX_MOVES + 1];
+    uint8_t saved_face[MAX_MOVES + 2], saved_turn[MAX_MOVES + 1];
+    uint16_t np = p, no = o;
+    uint8_t left = bound, face = 0, turn = 0, last_face = FACES;
 
     COUNT_NODE();
     if (bound == 0)
         return p == 0 && o == 0;
-    face[bound + 1] = FACES;
-    node_p[left] = next_p[left] = p;
-    node_o[left] = next_o[left] = o;
-    face[left] = 0;
-    turns[left] = 0;
+    saved_face[bound + 1] = FACES;
     for (;;) {
-        uint8_t f = face[left];
         /* This face is done, or was the parent's: try the next, and once all
          * three are done, back up to the parent. */
-        if (f == face[left + 1] || turns[left] == 3) {
-            if (++f == FACES) {
+        if (face == last_face || turn == 3) {
+            if (++face == FACES) {
                 if (++left > bound)
                     return 0;
+                np = p;
+                no = o;
+                p = saved_p[left];
+                o = saved_o[left];
+                face = saved_face[left];
+                turn = saved_turn[left];
+                last_face = saved_face[left + 1];
                 continue;
             }
-            face[left] = f;
-            turns[left] = 0;
-            next_p[left] = node_p[left];
-            next_o[left] = node_o[left];
+            turn = 0;
+            np = p;
+            no = o;
             continue;
         }
-        uint16_t np = next_p[left] = permutation_move[next_p[left]][f];
-        uint16_t no = next_o[left] = orientation_move[next_o[left]][f];
-        uint8_t move = (uint8_t) (f * 3U + turns[left]++);
+        np = permutation_move[np][face];
+        no = orientation_move[no][face];
+        ++turn;
         if (permutation_depth[np] >= left || orientation_depth[no] >= left)
             continue;
-        solution[left - 1] = inverse_move[move];
+        solution[left - 1] = inverse_move[face * 3U + turn - 1U];
         COUNT_NODE();
         if (left == 1) {
             if (np == 0 && no == 0)
                 return 1;
             continue;
         }
+        saved_p[left] = p;
+        saved_o[left] = o;
+        saved_face[left] = face;
+        saved_turn[left] = turn;
         --left;
-        node_p[left] = next_p[left] = np;
-        node_o[left] = next_o[left] = no;
-        face[left] = 0;
-        turns[left] = 0;
+        p = np;
+        o = no;
+        last_face = face;
+        face = 0;
+        turn = 0;
     }
 }
 
