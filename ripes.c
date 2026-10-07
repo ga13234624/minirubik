@@ -37,23 +37,23 @@ static uint8_t solution[MAX_MOVES];
 /* The tables are indexed by solver.c's rank_state, so these two must agree
  * with it. This is its Lehmer rank, adding each inversion's factorial weight
  * instead of multiplying, which keeps mul and __mulsi3 out of RV32I code. */
-static uint16_t rank_permutation(const uint8_t p[CUBIES])
+static uint32_t rank_permutation(const uint8_t p[CUBIES])
 {
     static const uint16_t weight[CUBIES - 1] = {720, 120, 24, 6, 2, 1};
-    uint16_t rank = 0;
-    for (uint8_t i = 0; i + 1 < CUBIES; ++i)
-        for (uint8_t j = (uint8_t) (i + 1); j < CUBIES; ++j)
+    uint32_t rank = 0;
+    for (uint32_t i = 0; i + 1 < CUBIES; ++i)
+        for (uint32_t j = i + 1; j < CUBIES; ++j)
             if (p[j] < p[i])
-                rank = (uint16_t) (rank + weight[i]);
+                rank += weight[i];
     return rank;
 }
 
 /* Base-3 rank of the first six twists; the seventh is implied by parity. */
-static uint16_t rank_orientation(const uint8_t o[CUBIES])
+static uint32_t rank_orientation(const uint8_t o[CUBIES])
 {
-    uint16_t rank = 0;
-    for (uint8_t i = 0; i + 1 < CUBIES; ++i)
-        rank = (uint16_t) (rank * 3U + o[i]);
+    uint32_t rank = 0;
+    for (uint32_t i = 0; i + 1 < CUBIES; ++i)
+        rank = rank * 3U + o[i];
     return rank;
 }
 
@@ -77,12 +77,12 @@ static uint16_t rank_orientation(const uint8_t o[CUBIES])
  * one this node must not turn, and saved_face[bound + 1] stands in for the
  * root's parent with FACES, which matches none.
  */
-static int search(uint16_t p, uint16_t o, uint8_t bound)
+static int search(uint32_t p, uint32_t o, uint32_t bound)
 {
     uint16_t saved_p[MAX_MOVES + 1], saved_o[MAX_MOVES + 1];
     uint8_t saved_face[MAX_MOVES + 2], saved_turn[MAX_MOVES + 1];
-    uint16_t np = p, no = o;
-    uint8_t left = bound, face = 0, turn = 0, last_face = FACES;
+    uint32_t np = p, no = o;
+    uint32_t left = bound, face = 0, turn = 0, last_face = FACES;
 
     COUNT_NODE();
     if (bound == 0)
@@ -121,10 +121,10 @@ static int search(uint16_t p, uint16_t o, uint8_t bound)
                 return 1;
             continue;
         }
-        saved_p[left] = p;
-        saved_o[left] = o;
-        saved_face[left] = face;
-        saved_turn[left] = turn;
+        saved_p[left] = (uint16_t) p;
+        saved_o[left] = (uint16_t) o;
+        saved_face[left] = (uint8_t) face;
+        saved_turn[left] = (uint8_t) turn;
         --left;
         p = np;
         o = no;
@@ -147,19 +147,19 @@ static int search(uint16_t p, uint16_t o, uint8_t bound)
 static int solve(const state_t *state)
 {
     state_t inverse;
-    for (uint8_t i = 0; i < CUBIES; ++i) {
-        uint8_t cubie = state->p[i];
-        inverse.p[cubie] = i;
+    for (uint32_t i = 0; i < CUBIES; ++i) {
+        uint32_t cubie = state->p[i];
+        inverse.p[cubie] = (uint8_t) i;
         inverse.o[cubie] = (uint8_t) (state->o[i] ? 3 - state->o[i] : 0);
     }
-    uint16_t p = rank_permutation(inverse.p);
-    uint16_t o = rank_orientation(inverse.o);
-    uint8_t bound = permutation_depth[p] > orientation_depth[o]
+    uint32_t p = rank_permutation(inverse.p);
+    uint32_t o = rank_orientation(inverse.o);
+    uint32_t bound = permutation_depth[p] > orientation_depth[o]
                         ? permutation_depth[p]
                         : orientation_depth[o];
     for (; bound <= MAX_MOVES; ++bound)
         if (search(p, o, bound))
-            return bound;
+            return (int) bound;
     return -1;
 }
 
@@ -168,23 +168,23 @@ static int solve(const state_t *state)
  * bad character, so a short string is never overrun. */
 static int parse_state(const char *input, state_t *state)
 {
-    uint8_t seen = 0, sum = 0;
-    for (uint8_t i = 0; i < 2 * CUBIES; ++i) {
-        uint8_t digit = (uint8_t) (input[i] - '1');
+    uint32_t seen = 0, sum = 0;
+    for (uint32_t i = 0; i < 2 * CUBIES; ++i) {
+        uint32_t digit = (uint32_t) (input[i] - '1');
         if (digit >= (i < CUBIES ? CUBIES : 3))
             return 0;
         if (i < CUBIES) {
             if (seen >> digit & 1U)
                 return 0;
-            seen = (uint8_t) (seen | 1U << digit);
-            state->p[i] = digit;
+            seen |= 1U << digit;
+            state->p[i] = (uint8_t) digit;
         } else {
-            sum = (uint8_t) (sum + digit);
-            state->o[i - CUBIES] = digit;
+            sum += digit;
+            state->o[i - CUBIES] = (uint8_t) digit;
         }
     }
     while (sum >= 3)
-        sum = (uint8_t) (sum - 3);
+        sum -= 3;
     return input[2 * CUBIES] == '\0' && sum == 0;
 }
 
