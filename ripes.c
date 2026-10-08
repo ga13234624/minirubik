@@ -155,7 +155,6 @@ face_done:
     face = saved_face[left];
     turn = saved_turn[left];
     last_face = saved_face[left + 1];
-resume:
     /* Carry on with the quarter turn after the one that reached the child. */
     if (turn == 1)
         goto turn_2;
@@ -165,11 +164,11 @@ resume:
 descend:
     solution[left - 1] = inverse_move[(face << 1) + turn];
     COUNT_NODE();
-    if (left == 1) {
-        if (np == 0 && no == 0)
-            return 1;
-        goto resume;
-    }
+    /* A child that survives pruning with one move left has depth 0 in both
+     * tables, and only the solved row does (verify.c checks it), so it is
+     * solved. */
+    if (left == 1)
+        return 1;
     saved_p[left] = (uint16_t) p;
     saved_o[left] = (uint16_t) o;
     saved_face[left] = (uint8_t) face;

@@ -121,13 +121,19 @@ int main(void)
 
     /* ---- H2: the pruning tables are complete and correctly bounded ---- */
     /* Each successor must also be the byte offset of a row, since ripes.c
-     * adds column offsets to it and reads there unchecked. */
+     * adds column offsets to it and reads there unchecked, and only the
+     * solved row may have depth 0, since ripes.c takes a child that survives
+     * pruning with one move left to be solved without looking. */
     {
         uint16_t pmax = 0, omax = 0;
         int ok = 1;
         for (uint16_t i = 0; i < PERMUTATIONS; ++i) {
             if (permutation_table[i][FACES] == 0xFF) {
                 printf("H2 FAIL: permutation depth %u unfilled\n", i);
+                ok = 0;
+            }
+            if (i != 0 && permutation_table[i][FACES] == 0) {
+                printf("H2 FAIL: permutation depth %u is 0\n", i);
                 ok = 0;
             }
             if (permutation_table[i][FACES] > pmax)
@@ -143,6 +149,10 @@ int main(void)
         for (uint16_t i = 0; i < ORIENTATIONS; ++i) {
             if (orientation_table[i][FACES] == 0xFF) {
                 printf("H2 FAIL: orientation depth %u unfilled\n", i);
+                ok = 0;
+            }
+            if (i != 0 && orientation_table[i][FACES] == 0) {
+                printf("H2 FAIL: orientation depth %u is 0\n", i);
                 ok = 0;
             }
             if (orientation_table[i][FACES] > omax)
@@ -165,7 +175,7 @@ int main(void)
                    orientation_table[0][FACES]);
             ok = 0;
         }
-        printf("H2 %s: tables filled, max depths %u / %u, solved entries 0\n",
+        printf("H2 %s: tables filled, max depths %u / %u, only solved at 0\n",
                ok ? "PASS" : "FAIL", pmax, omax);
     }
 
