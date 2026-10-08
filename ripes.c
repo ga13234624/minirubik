@@ -88,97 +88,75 @@ static uint32_t rank_orientation(const uint8_t o[CUBIES])
  *
  * It does not recurse. The node being expanded lives in locals the compiler
  * keeps in registers: its position (p, o), `left` moves from the goal, the
- * face it is turning and the position (np, no) its turns have reached. Only
- * descending to a child touches memory, saving the parent's p, o, face and the
- * number of quarter turns that reached the child at level `left`; backing up
- * loads them again, and the parent's (np, no) is the child it is leaving. The
- * nodes are visited in the order a recursive search would visit them, so the
- * first solution found is the same.
+ * face it is turning, how many quarter turns of that face it has tried and the
+ * position (np, no) they reached. Only descending to a child touches memory,
+ * saving the parent's p, o, face and turn at level `left`; backing up loads
+ * them again, and the parent's (np, no) is the child it is leaving. The nodes
+ * are visited in the order a recursive search would visit them, so the first
+ * solution found is the same.
  *
  * `face` is held as its byte offset in a row, 2 * face, so it indexes the
- * tables as it is. saved_face[left + 1] is the parent's face, the one this node
- * must not turn, and saved_face[bound + 1] stands in for the root's parent with
- * DEPTH_AT, which matches none.
- *
- * The search is laid out to take as few branches as it can, since every taken
- * branch flushes the pipeline. The three quarter turns of a face are written
- * out, so a pruned child falls through to the next one, and an edge costs one
- * branch, not taken unless the child survives. The face the parent turned is
- * stepped over with arithmetic when choosing the next face, not tested on
- * every edge. Backing up to a parent resumes it after the turn it had reached.
+ * tables as it is; it steps by 2 and reaches DEPTH_AT when every face is done.
+ * saved_face[left + 1] is the parent's face, the one this node must not turn,
+ * and saved_face[bound + 1] stands in for the root's parent with DEPTH_AT,
+ * which matches none.
  */
 static int search(uint32_t p, uint32_t o, uint32_t bound)
 {
     uint16_t saved_p[MAX_MOVES + 1], saved_o[MAX_MOVES + 1];
     uint8_t saved_face[MAX_MOVES + 2], saved_turn[MAX_MOVES + 1];
-    uint32_t np, no, left = bound, face, turn, last_face = DEPTH_AT;
+    uint32_t np = p, no = o;
+    uint32_t left = bound, face = 0, turn = 0, last_face = DEPTH_AT;
 
     COUNT_NODE();
     if (bound == 0)
         return p == 0 && o == 0;
     saved_face[bound + 1] = DEPTH_AT;
-
-#define TRY_TURN(t)                                                            \
-    do {                                                                       \
-        np = entry(permutation_table, np + face);                              \
-        no = entry(orientation_table, no + face);                              \
-        if ((int32_t) ((entry(permutation_table, np + DEPTH_AT) - left) &      \
-                       (entry(orientation_table, no + DEPTH_AT) - left)) < 0) { \
-            turn = (t);                                                        \
-            goto descend;                                                      \
-        }                                                                      \
-    } while (0)
-
-node:
-    /* The first face, 0, unless the parent turned it. */
-    face = (uint32_t) (last_face == 0) << 1;
-next_face:
-    np = p;
-    no = o;
-    TRY_TURN(1);
-turn_2:
-    TRY_TURN(2);
-turn_3:
-    TRY_TURN(3);
-face_done:
-    /* Step to the next face, and over it too if the parent turned it. */
-    face += 2;
-    face += (uint32_t) (face == last_face) << 1;
-    if (face < DEPTH_AT)
-        goto next_face;
-    if (++left > bound)
-        return 0;
-    np = p;
-    no = o;
-    p = saved_p[left];
-    o = saved_o[left];
-    face = saved_face[left];
-    turn = saved_turn[left];
-    last_face = saved_face[left + 1];
-    /* Carry on with the quarter turn after the one that reached the child. */
-    if (turn == 1)
-        goto turn_2;
-    if (turn == 2)
-        goto turn_3;
-    goto face_done;
-descend:
-    solution[left - 1] = inverse_move[(face << 1) + turn];
-    COUNT_NODE();
-    /* A child that survives pruning with one move left has depth 0 in both
-     * tables, and only the solved row does (verify.c checks it), so it is
-     * solved. */
-    if (left == 1)
-        return 1;
-    saved_p[left] = (uint16_t) p;
-    saved_o[left] = (uint16_t) o;
-    saved_face[left] = (uint8_t) face;
-    saved_turn[left] = (uint8_t) turn;
-    --left;
-    p = np;
-    o = no;
-    last_face = face;
-    goto node;
-#undef TRY_TURN
+    for (;;) {
+        /* This face is done, or was the parent's: try the next, and once all
+         * three are done, back up to the parent. */
+        if (face == last_face || turn == 3) {
+            if ((face += 2) == DEPTH_AT) {
+                if (++left > bound)
+                    return 0;
+                np = p;
+                no = o;
+                p = saved_p[left];
+                o = saved_o[left];
+                face = saved_face[left];
+                turn = saved_turn[left];
+                last_face = saved_face[left + 1];
+                continue;
+            }
+            turn = 0;
+            np = p;
+            no = o;
+            continue;
+        }
+        np = entry(permutation_table, np + face);
+        no = entry(orientation_table, no + face);
+        ++turn;
+        if (entry(permutation_table, np + DEPTH_AT) >= left ||
+            entry(orientation_table, no + DEPTH_AT) >= left)
+            continue;
+        solution[left - 1] = inverse_move[(face << 1) + turn];
+        COUNT_NODE();
+        if (left == 1) {
+            if (np == 0 && no == 0)
+                return 1;
+            continue;
+        }
+        saved_p[left] = (uint16_t) p;
+        saved_o[left] = (uint16_t) o;
+        saved_face[left] = (uint8_t) face;
+        saved_turn[left] = (uint8_t) turn;
+        --left;
+        p = np;
+        o = no;
+        last_face = face;
+        face = 0;
+        turn = 0;
+    }
 }
 
 /* Fills solution[] and returns its length, or -1 if no solution exists.
