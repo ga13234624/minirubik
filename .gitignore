@@ -3,3 +3,11 @@
 *.swp
 solver
 mini
+ripes
+ripes.elf
+tests/reference
+tests/ripes-batch
+gen_tables
+verify
+ripes_host
+*.elf
